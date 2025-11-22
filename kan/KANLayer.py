@@ -216,9 +216,9 @@ class KANLayer(nn.Module):
         #print('y_eval 2', y_eval.shape)
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
 
-    def set_splines(self, x, modelList, mode='sample'):
+    def set_splines(self, x, modelPartition, mode='sample'):
         '''
-        update grid from samples
+        set the spline functions so that they match the MLP partitions on samples
         
         Args:
         -----
@@ -247,11 +247,16 @@ class KANLayer(nn.Module):
         
         x_pos, sort_idx = torch.sort(x, dim=0)
 
-        if isinstance(modelList[0], torch.nn.Linear):
+        if mode == 'grid':
+            sample_grid = get_grid(2*num_interval)
+            x_pos = sample_grid.permute(1,0)
+        
+        if isinstance(modelPartition[0], torch.nn.Linear):
             for i in range(self.in_dim):
-                weight = modelList[0].weight[:,i]  # (out_dim,)
-                bias = modelList[0].bias  # (out_dim,)
-                y_spline = weight[None, :] * x_pos[:,[i]] + bias[None, :]  # (batch, out_dim)
+                weight = modelPartition[0].weight[:,i]  # (out_dim,)
+                bias = modelPartition[0].bias  # (out_dim,)
+                base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
+                y_spline = ((weight[None, :] * x_pos[:,[i]] + bias[None, :]) - self.scale_base * base) / self.scale_sp  # (batch, out_dim)
                 if i == 0:
                     y = y_spline[:,None,:]
                 else:
@@ -264,12 +269,13 @@ class KANLayer(nn.Module):
                 nn.SiLU, nn.Mish, nn.Softplus, nn.Softshrink, nn.Softsign,
                 nn.Tanh, nn.Tanhshrink, nn.Threshold, nn.GLU
             )
-            if isinstance(modelList[0], ACTIVATION_TYPES) and isinstance(modelList[1], torch.nn.Linear):
-                x_temp = modelList[0](x_pos)
+            if isinstance(modelPartition[0], ACTIVATION_TYPES) and isinstance(modelPartition[1], torch.nn.Linear):
+                x_temp = modelPartition[0](x_pos)
                 for i in range(self.in_dim):
-                    weight = modelList[1].weight[:,i]  # (out_dim,)
-                    bias = modelList[1].bias  # (out_dim,)
-                    y_spline = weight[None, :] * x_temp[:,[i]] + bias[None, :]  # (batch, out_dim)
+                    weight = modelPartition[1].weight[:,i]  # (out_dim,)
+                    bias = modelPartition[1].bias  # (out_dim,)
+                    base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
+                    y_spline = (weight[None, :] * x_temp[:,[i]] + bias[None, :] - self.scale_base * base) / self.scale_sp  # (batch, out_dim)
                     if i == 0:
                         y = y_spline[:,None,:]
                     else:
@@ -294,10 +300,6 @@ class KANLayer(nn.Module):
         
         grid = get_grid(num_interval)
         
-        if mode == 'grid':
-            sample_grid = get_grid(2*num_interval)
-            x_pos = sample_grid.permute(1,0)
-            y = coef2curve(x_pos, self.grid, self.coef, self.k)
         
         self.grid.data = extend_grid(grid, k_extend=self.k)
         #print('x_pos 2', x_pos.shape)
