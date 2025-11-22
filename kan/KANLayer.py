@@ -216,6 +216,94 @@ class KANLayer(nn.Module):
         #print('y_eval 2', y_eval.shape)
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
 
+    def set_splines(self, x, modelList, mode='sample'):
+        '''
+        update grid from samples
+        
+        Args:
+        -----
+            x : 2D torch.float
+                inputs, shape (number of samples, input dimension)
+            
+            y : 3D torch.float
+                outputs of spline functions, shape (number of samples, input dimension, output dimension)
+            
+        Returns:
+        --------
+            None
+        
+        Example
+        -------
+        >>> model = KANLayer(in_dim=1, out_dim=1, num=5, k=3)
+        >>> print(model.grid.data)
+        >>> x = torch.linspace(-3,3,steps=100)[:,None]
+        >>> model.update_grid_from_samples(x)
+        >>> print(model.grid.data)
+        '''
+
+
+        batch = x.shape[0]
+        #x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, ).to(self.device)).reshape(batch, self.size).permute(1, 0)
+        
+        x_pos, sort_idx = torch.sort(x, dim=0)
+
+        if isinstance(modelList[0], torch.nn.Linear):
+            for i in range(self.in_dim):
+                weight = modelList[0].weight[:,i]  # (out_dim,)
+                bias = modelList[0].bias  # (out_dim,)
+                y_spline = weight[None, :] * x_pos[:,[i]] + bias[None, :]  # (batch, out_dim)
+                if i == 0:
+                    y = y_spline[:,None,:]
+                else:
+                    y = torch.cat([y, y_spline[:,None,:]], dim=1)  # (batch, in_dim, out_dim)
+        else:
+            ACTIVATION_TYPES = (
+                nn.ELU, nn.Hardshrink, nn.Hardsigmoid, nn.Hardtanh, nn.Hardswish,
+                nn.LeakyReLU, nn.LogSigmoid, nn.MultiheadAttention, nn.PReLU,
+                nn.ReLU, nn.ReLU6, nn.RReLU, nn.SELU, nn.CELU, nn.GELU, nn.Sigmoid,
+                nn.SiLU, nn.Mish, nn.Softplus, nn.Softshrink, nn.Softsign,
+                nn.Tanh, nn.Tanhshrink, nn.Threshold, nn.GLU
+            )
+            if isinstance(modelList[0], ACTIVATION_TYPES) and isinstance(modelList[1], torch.nn.Linear):
+                x_temp = modelList[0](x_pos)
+                for i in range(self.in_dim):
+                    weight = modelList[1].weight[:,i]  # (out_dim,)
+                    bias = modelList[1].bias  # (out_dim,)
+                    y_spline = weight[None, :] * x_temp[:,[i]] + bias[None, :]  # (batch, out_dim)
+                    if i == 0:
+                        y = y_spline[:,None,:]
+                    else:
+                        y = torch.cat([y, y_spline[:,None,:]], dim=1)  # (batch, in_dim, out_dim)
+            else:
+                raise ValueError("The MLP partitions should be of the form [Activation, Linear] or [Linear].")
+                
+        
+        
+        # y_eval = coef2curve(x_pos, self.grid, self.coef, self.k)
+        num_interval = self.grid.shape[1] - 1 - 2*self.k
+        
+        def get_grid(num_interval):
+            ids = [int(batch / num_interval * i) for i in range(num_interval)] + [-1]
+            grid_adaptive = x_pos[ids, :].permute(1,0)
+            margin = 0.00
+            h = (grid_adaptive[:,[-1]] - grid_adaptive[:,[0]] + 2 * margin)/num_interval
+            grid_uniform = grid_adaptive[:,[0]] - margin + h * torch.arange(num_interval+1,)[None, :].to(x.device)
+            grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
+            return grid
+        
+        
+        grid = get_grid(num_interval)
+        
+        if mode == 'grid':
+            sample_grid = get_grid(2*num_interval)
+            x_pos = sample_grid.permute(1,0)
+            y = coef2curve(x_pos, self.grid, self.coef, self.k)
+        
+        self.grid.data = extend_grid(grid, k_extend=self.k)
+        #print('x_pos 2', x_pos.shape)
+        #print('y_eval 2', y_eval.shape)
+        self.coef.data = curve2coef(x_pos, y, self.grid, self.k)
+
     def initialize_grid_from_parent(self, parent, x, mode='sample'):
         '''
         update grid from a parent KANLayer & samples

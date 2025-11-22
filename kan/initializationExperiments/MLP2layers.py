@@ -11,8 +11,8 @@ class NeuralNetwork(nn.Module):
         )
 
     def forward(self, x):
-        y_pred = self.linear_relu_stack(x)
-        return y_pred
+        logits = self.linear_relu_stack(x)
+        return logits
 
 def train_loop(dataloader, model, loss_fn, optimizer):
         device = "cpu"
