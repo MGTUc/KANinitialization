@@ -709,6 +709,32 @@ class MultKAN(nn.Module):
         for l in range(self.depth):
             self.get_act(x)
             self.act_fun[l].update_grid_from_samples(self.acts[l])
+
+    def set_splines(self, x, modelPartitions):
+        '''
+        update grid from samples
+        
+        Args:
+        -----
+            x : 2D torch.tensor
+                inputs
+
+        Returns:
+        --------
+            None
+            
+        Example
+        -------
+        >>> from kan import *
+        >>> model = KAN(width=[1,1], grid=5, k=3, seed=0)
+        >>> print(model.act_fun[0].grid)
+        >>> x = torch.linspace(-10,10,steps=101)[:,None]
+        >>> model.update_grid_from_samples(x)
+        >>> print(model.act_fun[0].grid)
+        ''' 
+        for l in range(self.depth):
+            self.get_act(x)
+            self.act_fun[l].set_splines(self.acts[l], modelPartitions[l])
             
     def update_grid(self, x):
         '''
