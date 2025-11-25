@@ -225,8 +225,8 @@ class KANLayer(nn.Module):
             x : 2D torch.float
                 inputs, shape (number of samples, input dimension)
             
-            y : 3D torch.float
-                outputs of spline functions, shape (number of samples, input dimension, output dimension)
+            modelPartition : list of nn.Module
+                model partitions
             
         Returns:
         --------
@@ -254,9 +254,19 @@ class KANLayer(nn.Module):
         if isinstance(modelPartition[0], torch.nn.Linear):
             for i in range(self.in_dim):
                 weight = modelPartition[0].weight[:,i]  # (out_dim,)
+                print("weight.shape", weight.shape)
                 bias = modelPartition[0].bias  # (out_dim,)
+                print("bias.shape", bias.shape)
                 base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
-                y_spline = ((weight[None, :] * x_pos[:,[i]] + bias[None, :]) - self.scale_base * base) / self.scale_sp  # (batch, out_dim)
+                print("scaled_base.shape", self.scale_base.shape)
+                scaled_base = self.scale_base[[i],:] * base
+                print("scaled_base.shape", scaled_base.shape)
+                print("base.shape", base.shape)
+                y_spline = weight[None, :] * x_pos[:,[i]] + bias[None, :] #- self.scale_base * base / self.scale_sp  # (batch, out_dim)
+                print("y_spline.shape", y_spline.shape)
+                print("scale_sp.shape", self.scale_sp.shape)
+                spline_scale = self.scale_sp[[i],:]
+                y_spline = y_spline - scaled_base / spline_scale  # (batch, out_dim)
                 if i == 0:
                     y = y_spline[:,None,:]
                 else:
@@ -275,7 +285,7 @@ class KANLayer(nn.Module):
                     weight = modelPartition[1].weight[:,i]  # (out_dim,)
                     bias = modelPartition[1].bias  # (out_dim,)
                     base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
-                    y_spline = (weight[None, :] * x_temp[:,[i]] + bias[None, :] - self.scale_base * base) / self.scale_sp  # (batch, out_dim)
+                    y_spline = weight[None, :] * x_temp[:,[i]] + bias[None, :] #- self.scale_base * base) / self.scale_sp  # (batch, out_dim)
                     if i == 0:
                         y = y_spline[:,None,:]
                     else:
@@ -299,11 +309,13 @@ class KANLayer(nn.Module):
         
         
         grid = get_grid(num_interval)
-        
+    
         
         self.grid.data = extend_grid(grid, k_extend=self.k)
         #print('x_pos 2', x_pos.shape)
         #print('y_eval 2', y_eval.shape)
+        print("y.shape", y.shape)
+        print("y", y)
         self.coef.data = curve2coef(x_pos, y, self.grid, self.k)
 
     def initialize_grid_from_parent(self, parent, x, mode='sample'):

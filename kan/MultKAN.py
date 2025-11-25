@@ -712,12 +712,14 @@ class MultKAN(nn.Module):
 
     def set_splines(self, x, modelPartitions):
         '''
-        update grid from samples
+        set splines based on sample points and MLP network partitions
         
         Args:
         -----
             x : 2D torch.tensor
                 inputs
+            modelPartitions : list of lists of nn.Module
+                model partitions
 
         Returns:
         --------
