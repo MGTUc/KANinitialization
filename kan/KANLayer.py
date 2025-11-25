@@ -240,7 +240,18 @@ class KANLayer(nn.Module):
         >>> model.update_grid_from_samples(x)
         >>> print(model.grid.data)
         '''
-
+        # def plot_y(x, y, i):
+        #     import matplotlib.pyplot as plt
+        #     for j in range(y.shape[1]):
+        #         plt.figure()
+        #         plt.clf()
+        #         plt.plot(x[:,i].detach().cpu().numpy(), y[:,j].detach().cpu().numpy())
+        #         plt.title(f'Spline for input {i} output {j}')
+        #         plt.xlabel('x')
+        #         plt.ylabel('spline(x)')
+        #         plt.grid()
+        #         plt.show()
+        #         plt.close()
 
         batch = x.shape[0]
         #x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, ).to(self.device)).reshape(batch, self.size).permute(1, 0)
@@ -251,72 +262,71 @@ class KANLayer(nn.Module):
             sample_grid = get_grid(2*num_interval)
             x_pos = sample_grid.permute(1,0)
         
-        if isinstance(modelPartition[0], torch.nn.Linear):
-            for i in range(self.in_dim):
-                weight = modelPartition[0].weight[:,i]  # (out_dim,)
-                print("weight.shape", weight.shape)
-                bias = modelPartition[0].bias  # (out_dim,)
-                print("bias.shape", bias.shape)
-                base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
-                print("scaled_base.shape", self.scale_base.shape)
-                scaled_base = self.scale_base[[i],:] * base
-                print("scaled_base.shape", scaled_base.shape)
-                print("base.shape", base.shape)
-                y_spline = weight[None, :] * x_pos[:,[i]] + bias[None, :] #- self.scale_base * base / self.scale_sp  # (batch, out_dim)
-                print("y_spline.shape", y_spline.shape)
-                print("scale_sp.shape", self.scale_sp.shape)
-                spline_scale = self.scale_sp[[i],:]
-                y_spline = y_spline - scaled_base / spline_scale  # (batch, out_dim)
-                if i == 0:
-                    y = y_spline[:,None,:]
-                else:
-                    y = torch.cat([y, y_spline[:,None,:]], dim=1)  # (batch, in_dim, out_dim)
-        else:
-            ACTIVATION_TYPES = (
+        print(modelPartition)
+        linear_start_idx = 0
+        ACTIVATION_TYPES = (
                 nn.ELU, nn.Hardshrink, nn.Hardsigmoid, nn.Hardtanh, nn.Hardswish,
                 nn.LeakyReLU, nn.LogSigmoid, nn.MultiheadAttention, nn.PReLU,
                 nn.ReLU, nn.ReLU6, nn.RReLU, nn.SELU, nn.CELU, nn.GELU, nn.Sigmoid,
                 nn.SiLU, nn.Mish, nn.Softplus, nn.Softshrink, nn.Softsign,
                 nn.Tanh, nn.Tanhshrink, nn.Threshold, nn.GLU
             )
-            if isinstance(modelPartition[0], ACTIVATION_TYPES) and isinstance(modelPartition[1], torch.nn.Linear):
-                x_temp = modelPartition[0](x_pos)
-                for i in range(self.in_dim):
-                    weight = modelPartition[1].weight[:,i]  # (out_dim,)
-                    bias = modelPartition[1].bias  # (out_dim,)
-                    base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
-                    y_spline = weight[None, :] * x_temp[:,[i]] + bias[None, :] #- self.scale_base * base) / self.scale_sp  # (batch, out_dim)
-                    if i == 0:
-                        y = y_spline[:,None,:]
-                    else:
-                        y = torch.cat([y, y_spline[:,None,:]], dim=1)  # (batch, in_dim, out_dim)
-            else:
-                raise ValueError("The MLP partitions should be of the form [Activation, Linear] or [Linear].")
+        if isinstance(modelPartition[0], ACTIVATION_TYPES):
+            x_pre = x_pos.clone()
+            x_pos = modelPartition[0](x_pos)
+            linear_start_idx = 1
+        
+        if isinstance(modelPartition[linear_start_idx], torch.nn.Linear):
+            for i in range(self.in_dim):
+                weight = modelPartition[linear_start_idx].weight[:,i]  # (out_dim,)
+                bias = modelPartition[linear_start_idx].bias  # (out_dim,)
+                base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
+                scaled_base = self.scale_base[[i],:] * base
+                y_spline = weight[None, :] * x_pos[:,[i]] + bias[None, :] #- self.scale_base * base / self.scale_sp  # (batch, out_dim)
+                
+                spline_scale = self.scale_sp[[i],:]
+                y_spline = y_spline - scaled_base / spline_scale  # (batch, out_dim)
+                # if linear_start_idx == 1:
+                #     plot_y(x_pre, y_spline, i)
+                # else:
+                #     plot_y(x_pos, y_spline, i)
+                if i == 0:
+                    y = y_spline[:,None,:]
+                else:
+                    y = torch.cat([y, y_spline[:,None,:]], dim=1)  # (batch, in_dim, out_dim)
+        else:
+            raise ValueError("The MLP partitions should be of the form [Activation, Linear] or [Linear].")
                 
         
         
         # y_eval = coef2curve(x_pos, self.grid, self.coef, self.k)
         num_interval = self.grid.shape[1] - 1 - 2*self.k
         
-        def get_grid(num_interval):
+        def get_grid(num_interval, xs):
             ids = [int(batch / num_interval * i) for i in range(num_interval)] + [-1]
-            grid_adaptive = x_pos[ids, :].permute(1,0)
+            grid_adaptive = xs[ids, :].permute(1,0)
             margin = 0.00
             h = (grid_adaptive[:,[-1]] - grid_adaptive[:,[0]] + 2 * margin)/num_interval
             grid_uniform = grid_adaptive[:,[0]] - margin + h * torch.arange(num_interval+1,)[None, :].to(x.device)
             grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
             return grid
         
-        
-        grid = get_grid(num_interval)
-    
-        
-        self.grid.data = extend_grid(grid, k_extend=self.k)
-        #print('x_pos 2', x_pos.shape)
-        #print('y_eval 2', y_eval.shape)
-        print("y.shape", y.shape)
-        print("y", y)
-        self.coef.data = curve2coef(x_pos, y, self.grid, self.k)
+        if linear_start_idx == 1:
+            grid = get_grid(num_interval, x_pre)
+            self.grid.data = extend_grid(grid, k_extend=self.k)
+            self.coef.data = curve2coef(x_pre, y, self.grid, self.k)
+            # y_test = coef2curve(x_pre, self.grid, self.coef, self.k)
+            # print('RELUs')
+            # for i in range(y_test.shape[1]):
+            #     plot_y(x_pre, y_test[:,i,:], i)
+        else:
+            grid = get_grid(num_interval, x_pos)
+            self.grid.data = extend_grid(grid, k_extend=self.k)
+            self.coef.data = curve2coef(x_pos, y, self.grid, self.k)
+            # y_test = coef2curve(x_pos, self.grid, self.coef, self.k)
+            # print('Linear')
+            # for i in range(y_test.shape[1]):
+            #     plot_y(x_pos, y_test[:,i,:], i)
 
     def initialize_grid_from_parent(self, parent, x, mode='sample'):
         '''

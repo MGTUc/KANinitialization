@@ -737,6 +737,7 @@ class MultKAN(nn.Module):
         for l in range(self.depth):
             self.get_act(x)
             self.act_fun[l].set_splines(self.acts[l], modelPartitions[l])
+        self.get_act(x)
             
     def update_grid(self, x):
         '''
