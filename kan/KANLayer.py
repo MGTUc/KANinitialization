@@ -275,17 +275,20 @@ class KANLayer(nn.Module):
             x_pre = x_pos.clone()
             x_pos = modelPartition[0](x_pos)
             linear_start_idx = 1
-        
+        self.scale_base.data = torch.zeros_like(self.scale_base.data)
         if isinstance(modelPartition[linear_start_idx], torch.nn.Linear):
             for i in range(self.in_dim):
                 weight = modelPartition[linear_start_idx].weight[:,i]  # (out_dim,)
-                bias = modelPartition[linear_start_idx].bias  # (out_dim,)
-                base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
-                scaled_base = self.scale_base[[i],:] * base
+                bias = modelPartition[linear_start_idx].bias / self.in_dim  # (out_dim,)
+                # bias = modelPartition[linear_start_idx].bias if i == 0 else torch.zeros_like(modelPartition[linear_start_idx].bias)
+                print(f'weight: {weight[None,:]}, bias: {bias[None,:]}')
+                # base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
+                # scaled_base = self.scale_base[[i],:] * base
                 y_spline = weight[None, :] * x_pos[:,[i]] + bias[None, :] #- self.scale_base * base / self.scale_sp  # (batch, out_dim)
                 
                 spline_scale = self.scale_sp[[i],:]
-                y_spline = y_spline - scaled_base / spline_scale  # (batch, out_dim)
+                # y_spline = (y_spline - scaled_base) / spline_scale  # (batch, out_dim)
+                y_spline = y_spline / spline_scale  # (batch, out_dim)
                 # if linear_start_idx == 1:
                 #     plot_y(x_pre, y_spline, i)
                 # else:
