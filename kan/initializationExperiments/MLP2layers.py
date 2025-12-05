@@ -39,10 +39,13 @@ def test_loop(dataloader, model, loss_fn):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     test_loss = 0
+    rmse = 0
     with torch.no_grad():
         for X, y in dataloader:
             X, y = X.to(device), y.to(device)
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
+            rmse += torch.sqrt(torch.mean((y - pred) ** 2)).item()
     test_loss /= num_batches
     print(f"Test loss: {test_loss:>7f}")
+    return rmse/num_batches

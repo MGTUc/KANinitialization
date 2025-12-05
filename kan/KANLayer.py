@@ -216,7 +216,52 @@ class KANLayer(nn.Module):
         #print('y_eval 2', y_eval.shape)
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
 
-    def set_splines(self, x, modelPartition, mode='sample'):
+    def set_spline_func(self, x, func, i, j, mode='sample'):
+        '''
+        set the spline functions so that they match a given function on samples
+        
+        Args:
+        -----
+            x : 2D torch.float
+                inputs, shape (number of samples, input dimension)
+            
+            func : function
+                target function
+            
+        Returns:
+        --------
+            None
+        '''
+
+
+        batch = x.shape[0]
+        x_pos = torch.sort(x, dim=0)[0]
+        y_eval = coef2curve(x_pos, self.grid, self.coef, self.k) # (batch, in_dim, out_dim)
+        y_func = func(x_pos[:,[i]])  # (batch, 1)
+        y_eval[:,i,j] = y_func[:,0]
+        
+        num_interval = self.grid.shape[1] - 1 - 2*self.k
+
+        def get_grid(num_interval):
+            ids = [int(batch / num_interval * i) for i in range(num_interval)] + [-1]
+            grid_adaptive = x_pos[ids, :].permute(1,0)
+            margin = 0.00
+            h = (grid_adaptive[:,[-1]] - grid_adaptive[:,[0]] + 2 * margin)/num_interval
+            grid_uniform = grid_adaptive[:,[0]] - margin + h * torch.arange(num_interval+1,)[None, :].to(x.device)
+            grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
+            return grid
+        
+        grid = get_grid(num_interval)
+
+        if mode == 'grid':
+            sample_grid = get_grid(2*num_interval)
+            x_pos = sample_grid.permute(1,0)
+            y_eval = func(x_pos)
+        
+        self.grid.data = extend_grid(grid, k_extend=self.k)
+        self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
+
+    def set_splines_MLP(self, x, modelPartition, mode='sample', func=None, ij=None):
         '''
         set the spline functions so that they match the MLP partitions on samples
         
@@ -240,29 +285,15 @@ class KANLayer(nn.Module):
         >>> model.update_grid_from_samples(x)
         >>> print(model.grid.data)
         '''
-        # def plot_y(x, y, i):
-        #     import matplotlib.pyplot as plt
-        #     for j in range(y.shape[1]):
-        #         plt.figure()
-        #         plt.clf()
-        #         plt.plot(x[:,i].detach().cpu().numpy(), y[:,j].detach().cpu().numpy())
-        #         plt.title(f'Spline for input {i} output {j}')
-        #         plt.xlabel('x')
-        #         plt.ylabel('spline(x)')
-        #         plt.grid()
-        #         plt.show()
-        #         plt.close()
 
         batch = x.shape[0]
-        #x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, ).to(self.device)).reshape(batch, self.size).permute(1, 0)
         
         x_pos, sort_idx = torch.sort(x, dim=0)
-
+        x_pre = x_pos.clone()
         if mode == 'grid':
             sample_grid = get_grid(2*num_interval)
             x_pos = sample_grid.permute(1,0)
         
-        print(modelPartition)
         linear_start_idx = 0
         ACTIVATION_TYPES = (
                 nn.ELU, nn.Hardshrink, nn.Hardsigmoid, nn.Hardtanh, nn.Hardswish,
@@ -272,37 +303,30 @@ class KANLayer(nn.Module):
                 nn.Tanh, nn.Tanhshrink, nn.Threshold, nn.GLU
             )
         if isinstance(modelPartition[0], ACTIVATION_TYPES):
-            x_pre = x_pos.clone()
             x_pos = modelPartition[0](x_pos)
             linear_start_idx = 1
+        
         self.scale_base.data = torch.zeros_like(self.scale_base.data)
         if isinstance(modelPartition[linear_start_idx], torch.nn.Linear):
-            for i in range(self.in_dim):
-                weight = modelPartition[linear_start_idx].weight[:,i]  # (out_dim,)
+            for input in range(self.in_dim):
+                weight = modelPartition[linear_start_idx].weight[:,input]  # (out_dim,)
                 bias = modelPartition[linear_start_idx].bias / self.in_dim  # (out_dim,)
-                # bias = modelPartition[linear_start_idx].bias if i == 0 else torch.zeros_like(modelPartition[linear_start_idx].bias)
-                print(f'weight: {weight[None,:]}, bias: {bias[None,:]}')
-                # base = self.base_fun(x_pos[:,[i]])  # (batch, 1)
-                # scaled_base = self.scale_base[[i],:] * base
-                y_spline = weight[None, :] * x_pos[:,[i]] + bias[None, :] #- self.scale_base * base / self.scale_sp  # (batch, out_dim)
+                y_spline = weight[None, :] * x_pos[:,[input]] + bias[None, :]  # (batch, out_dim)
                 
-                spline_scale = self.scale_sp[[i],:]
-                # y_spline = (y_spline - scaled_base) / spline_scale  # (batch, out_dim)
+                spline_scale = self.scale_sp[[input],:]
                 y_spline = y_spline / spline_scale  # (batch, out_dim)
-                # if linear_start_idx == 1:
-                #     plot_y(x_pre, y_spline, i)
-                # else:
-                #     plot_y(x_pos, y_spline, i)
-                if i == 0:
+                if input == 0:
                     y = y_spline[:,None,:]
                 else:
                     y = torch.cat([y, y_spline[:,None,:]], dim=1)  # (batch, in_dim, out_dim)
         else:
             raise ValueError("The MLP partitions should be of the form [Activation, Linear] or [Linear].")
-                
+
+        if func is not None and ij is not None: 
+            for (i, j) in ij:
+                y_func = func(x_pre[:,[i]]) # (batch, 1)
+                y[:,i,j] = y_func[:,0]
         
-        
-        # y_eval = coef2curve(x_pos, self.grid, self.coef, self.k)
         num_interval = self.grid.shape[1] - 1 - 2*self.k
         
         def get_grid(num_interval, xs):
@@ -314,22 +338,9 @@ class KANLayer(nn.Module):
             grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
             return grid
         
-        if linear_start_idx == 1:
-            grid = get_grid(num_interval, x_pre)
-            self.grid.data = extend_grid(grid, k_extend=self.k)
-            self.coef.data = curve2coef(x_pre, y, self.grid, self.k)
-            # y_test = coef2curve(x_pre, self.grid, self.coef, self.k)
-            # print('RELUs')
-            # for i in range(y_test.shape[1]):
-            #     plot_y(x_pre, y_test[:,i,:], i)
-        else:
-            grid = get_grid(num_interval, x_pos)
-            self.grid.data = extend_grid(grid, k_extend=self.k)
-            self.coef.data = curve2coef(x_pos, y, self.grid, self.k)
-            # y_test = coef2curve(x_pos, self.grid, self.coef, self.k)
-            # print('Linear')
-            # for i in range(y_test.shape[1]):
-            #     plot_y(x_pos, y_test[:,i,:], i)
+        grid = get_grid(num_interval, x_pre)
+        self.grid.data = extend_grid(grid, k_extend=self.k)
+        self.coef.data = curve2coef(x_pre, y, self.grid, self.k)
 
     def initialize_grid_from_parent(self, parent, x, mode='sample'):
         '''

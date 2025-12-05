@@ -710,7 +710,7 @@ class MultKAN(nn.Module):
             self.get_act(x)
             self.act_fun[l].update_grid_from_samples(self.acts[l])
 
-    def set_splines(self, x, modelPartitions):
+    def set_splines_MLP(self, x, modelPartitions):
         '''
         set splines based on sample points and MLP network partitions
         
@@ -724,20 +724,39 @@ class MultKAN(nn.Module):
         Returns:
         --------
             None
-            
-        Example
-        -------
-        >>> from kan import *
-        >>> model = KAN(width=[1,1], grid=5, k=3, seed=0)
-        >>> print(model.act_fun[0].grid)
-        >>> x = torch.linspace(-10,10,steps=101)[:,None]
-        >>> model.update_grid_from_samples(x)
-        >>> print(model.act_fun[0].grid)
         ''' 
         for l in range(self.depth):
             self.get_act(x)
-            self.act_fun[l].set_splines(self.acts[l], modelPartitions[l])
+            self.act_fun[l].set_splines_MLP(self.acts[l], modelPartitions[l])
         self.get_act(x)
+
+    def set_splines_MLPandFuncs(self, x, modelPartitions, func_list):
+        '''
+        set splines based on sample points and a function
+        
+        Args:
+        -----
+            x : 2D torch.tensor
+                inputs
+            modelPartitions : list of lists of nn.Module
+                model partitions
+            func_list : (func, l, i, j) list
+                (func, l, i, j) means in layer l, for the i-th output neuron, the j-th input neuron uses func as the symbolic function
+
+        Returns:
+        --------
+            None
+        ''' 
+        for l in range(self.depth):
+            self.get_act(x)
+            func = None
+            ij = []
+            for item in func_list:
+                if item[1] == l:
+                    func = item[0]
+                    ij.append((item[2], item[3]))
+            self.act_fun[l].set_splines_MLP(self.acts[l], modelPartitions[l], func=func, ij=ij)
+        self.get_act(self.acts[0])
             
     def update_grid(self, x):
         '''
