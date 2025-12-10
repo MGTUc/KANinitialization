@@ -261,7 +261,7 @@ class KANLayer(nn.Module):
         self.grid.data = extend_grid(grid, k_extend=self.k)
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
 
-    def set_splines_MLP(self, x, modelPartition, mode='sample', func=None, ij=None):
+    def set_splines_MLP(self, x, modelPartition, mode='sample', func_list=None):
         '''
         set the spline functions so that they match the MLP partitions on samples
         
@@ -322,8 +322,8 @@ class KANLayer(nn.Module):
         else:
             raise ValueError("The MLP partitions should be of the form [Activation, Linear] or [Linear].")
 
-        if func is not None and ij is not None: 
-            for (i, j) in ij:
+        if func_list is not None: 
+            for (func, i, j) in func_list:
                 y_func = func(x_pre[:,[i]]) # (batch, 1)
                 y[:,i,j] = y_func[:,0]
         

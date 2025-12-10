@@ -749,13 +749,11 @@ class MultKAN(nn.Module):
         ''' 
         for l in range(self.depth):
             self.get_act(x)
-            func = None
-            ij = []
+            funcij = []
             for item in func_list:
                 if item[1] == l:
-                    func = item[0]
-                    ij.append((item[2], item[3]))
-            self.act_fun[l].set_splines_MLP(self.acts[l], modelPartitions[l], func=func, ij=ij)
+                    funcij.append((item[0],item[2], item[3]))
+            self.act_fun[l].set_splines_MLP(self.acts[l], modelPartitions[l], func_list=funcij)
         self.get_act(self.acts[0])
             
     def update_grid(self, x):
