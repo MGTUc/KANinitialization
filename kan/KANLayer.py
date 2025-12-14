@@ -303,11 +303,14 @@ class KANLayer(nn.Module):
                 nn.Tanh, nn.Tanhshrink, nn.Threshold, nn.GLU
             )
         if isinstance(modelPartition[0], ACTIVATION_TYPES):
-            x_pos = modelPartition[0](x_pos)
-            linear_start_idx = 1
+            if len(modelPartition) == 1:
+                y = modelPartition[0](x_pos)[:,None,:]  # (batch, in_dim, 1)
+                linear_start_idx = len(modelPartition)  # no linear layer
+            else:
+                x_pos = modelPartition[0](x_pos)  # (batch, in_dim)
         
         self.scale_base.data = torch.zeros_like(self.scale_base.data)
-        if isinstance(modelPartition[linear_start_idx], torch.nn.Linear):
+        if linear_start_idx + 1 == len(modelPartition) and isinstance(modelPartition[linear_start_idx], torch.nn.Linear) :
             for input in range(self.in_dim):
                 weight = modelPartition[linear_start_idx].weight[:,input]  # (out_dim,)
                 bias = modelPartition[linear_start_idx].bias / self.in_dim  # (out_dim,)
@@ -319,8 +322,8 @@ class KANLayer(nn.Module):
                     y = y_spline[:,None,:]
                 else:
                     y = torch.cat([y, y_spline[:,None,:]], dim=1)  # (batch, in_dim, out_dim)
-        else:
-            raise ValueError("The MLP partitions should be of the form [Activation, Linear] or [Linear].")
+        # else:
+        #     raise ValueError("The MLP partitions should be of the form [Activation], [Activation, Linear] or [Linear].")
 
         if func_list is not None: 
             for (func, i, j) in func_list:
