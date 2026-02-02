@@ -712,7 +712,8 @@ class MultKAN(nn.Module):
 
     def set_splines_MLP(self, x, modelPartitions):
         '''
-        set splines based on sample points and MLP network partitions
+        set splines based on sample points and MLP network partitions.
+        The partitions should be of the form [Linear Layer] or [Activation function, Linear layer]
         
         Args:
         -----
@@ -733,6 +734,8 @@ class MultKAN(nn.Module):
     def set_splines_MLPandFuncs(self, x, modelPartitions, func_list):
         '''
         set splines based on sample points and a function
+        The partitions should be of the form [Linear Layer] or [Activation function, Linear layer]
+        the functions should have one input and one output
         
         Args:
         -----

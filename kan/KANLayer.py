@@ -216,50 +216,6 @@ class KANLayer(nn.Module):
         #print('y_eval 2', y_eval.shape)
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
 
-    def set_spline_func(self, x, func, i, j, mode='sample'):
-        '''
-        set the spline functions so that they match a given function on samples
-        
-        Args:
-        -----
-            x : 2D torch.float
-                inputs, shape (number of samples, input dimension)
-            
-            func : function
-                target function
-            
-        Returns:
-        --------
-            None
-        '''
-
-
-        batch = x.shape[0]
-        x_pos = torch.sort(x, dim=0)[0]
-        y_eval = coef2curve(x_pos, self.grid, self.coef, self.k) # (batch, in_dim, out_dim)
-        y_func = func(x_pos[:,[i]])  # (batch, 1)
-        y_eval[:,i,j] = y_func[:,0]
-        
-        num_interval = self.grid.shape[1] - 1 - 2*self.k
-
-        def get_grid(num_interval):
-            ids = [int(batch / num_interval * i) for i in range(num_interval)] + [-1]
-            grid_adaptive = x_pos[ids, :].permute(1,0)
-            margin = 0.00
-            h = (grid_adaptive[:,[-1]] - grid_adaptive[:,[0]] + 2 * margin)/num_interval
-            grid_uniform = grid_adaptive[:,[0]] - margin + h * torch.arange(num_interval+1,)[None, :].to(x.device)
-            grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
-            return grid
-        
-        grid = get_grid(num_interval)
-
-        if mode == 'grid':
-            sample_grid = get_grid(2*num_interval)
-            x_pos = sample_grid.permute(1,0)
-            y_eval = func(x_pos)
-        
-        self.grid.data = extend_grid(grid, k_extend=self.k)
-        self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
 
     def set_splines_MLP(self, x, modelPartition, mode='sample', func_list=None):
         '''
@@ -305,9 +261,10 @@ class KANLayer(nn.Module):
         if isinstance(modelPartition[0], ACTIVATION_TYPES):
             if len(modelPartition) == 1:
                 y = modelPartition[0](x_pos)[:,None,:]  # (batch, in_dim, 1)
-                linear_start_idx = len(modelPartition)  # no linear layer
+                linear_start_idx += 1  # no linear layer
             else:
                 x_pos = modelPartition[0](x_pos)  # (batch, in_dim)
+                linear_start_idx += 1
         
         self.scale_base.data = torch.zeros_like(self.scale_base.data)
         if linear_start_idx + 1 == len(modelPartition) and isinstance(modelPartition[linear_start_idx], torch.nn.Linear) :
