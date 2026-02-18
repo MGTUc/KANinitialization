@@ -710,6 +710,27 @@ class MultKAN(nn.Module):
             self.get_act(x)
             self.act_fun[l].update_grid_from_samples(self.acts[l])
 
+    def set_splines_MLPKAN(self, x, MLPKAN):
+        '''
+        set splines based on sample points and MLPKAN network partitions.
+        
+        Args:
+        -----
+            x : 2D torch.tensor
+                inputs
+            MLPKAN : MLPKAN
+                the MLPKAN model whose partitions are used to set splines
+
+        Returns:
+        --------
+            None
+        ''' 
+        for l in range(self.depth):
+            self.get_act(x)
+            modelPartitions = MLPKAN.layers[l]
+            self.act_fun[l].set_splines_MLPKAN(self.acts[l], modelPartitions)
+        self.get_act(x)
+
     def set_splines_MLP(self, x, modelPartitions):
         '''
         set splines based on sample points and MLP network partitions.

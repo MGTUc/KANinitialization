@@ -216,6 +216,35 @@ class KANLayer(nn.Module):
         #print('y_eval 2', y_eval.shape)
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k)
 
+    def set_splines_MLPKAN(self, x, modelPartition, mode='sample'):
+
+        batch = x.shape[0]
+        x_pos = torch.sort(x, dim=0)[0]
+        y = torch.zeros(x.shape[0], self.in_dim, self.out_dim, device=x.device, dtype=x.dtype)
+        self.scale_base.data = torch.zeros_like(self.scale_base.data)
+        for input in range(self.in_dim):
+            for output in range(self.out_dim):
+                subnet = modelPartition[f'subnet_{input}_{output}']
+                x_j = x_pos[:, input:input+1]
+                subnet_out = subnet(x_j)
+                y[:,input,output] = subnet_out.squeeze(-1) / self.scale_sp[input,output]
+
+        num_interval = self.grid.shape[1] - 1 - 2*self.k
+        def get_grid(num_interval, xs):
+            ids = [int(batch / num_interval * i) for i in range(num_interval)] + [-1]
+            grid_adaptive = xs[ids, :].permute(1,0)
+            margin = 0.00
+            h = (grid_adaptive[:,[-1]] - grid_adaptive[:,[0]] + 2 * margin)/num_interval
+            grid_uniform = grid_adaptive[:,[0]] - margin + h * torch.arange(num_interval+1,)[None, :].to(xs.device)
+            grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
+            return grid
+
+        grid = get_grid(num_interval, x_pos)
+        self.grid.data = extend_grid(grid, k_extend=self.k)
+        self.coef.data = curve2coef(x_pos, y, self.grid, self.k)
+
+
+
 
     def set_splines_MLP(self, x, modelPartition, mode='sample', func_list=None):
         '''
@@ -294,7 +323,7 @@ class KANLayer(nn.Module):
             grid_adaptive = xs[ids, :].permute(1,0)
             margin = 0.00
             h = (grid_adaptive[:,[-1]] - grid_adaptive[:,[0]] + 2 * margin)/num_interval
-            grid_uniform = grid_adaptive[:,[0]] - margin + h * torch.arange(num_interval+1,)[None, :].to(x.device)
+            grid_uniform = grid_adaptive[:,[0]] - margin + h * torch.arange(num_interval+1,)[None, :].to(xs.device)
             grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
             return grid
         
