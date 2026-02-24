@@ -13,3 +13,7 @@ figures
 molecule
 applications
 experiments
+.idea/
+.ipynb_checkpoints/
+__pycache__/
+.editorconfig

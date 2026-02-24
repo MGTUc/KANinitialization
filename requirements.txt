@@ -8,3 +8,8 @@ tqdm==4.66.2
 pandas==2.0.1
 seaborn
 pyyaml
+torchdistill>=0.3.2
+jinja2
+zss
+graphviz
+transformers
