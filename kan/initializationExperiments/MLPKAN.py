@@ -2,10 +2,9 @@ import torch
 from torch import nn
 
 class subnetwork(nn.Module):
-    def __init__(self, subnetworkshape = [2,2], init_scale=1.0):
+    def __init__(self, subnetworkshape = [2,2]):
         super(subnetwork, self).__init__()
         self.subnetworkshape = subnetworkshape
-        self.init_scale = init_scale
         self.layers = nn.ModuleList()
         self.layers.append(nn.Linear(1, subnetworkshape[0]))
         self.layers.append(nn.ReLU())
@@ -24,10 +23,9 @@ class subnetwork(nn.Module):
         
 
 class MLPKAN(nn.Module):
-    def __init__(self, input_size, hidden_sizes=[3], output_size=1, subnetworkshape = [2,2], subnet_init_scale=1.0):
+    def __init__(self, input_size, hidden_sizes=[3], output_size=1, subnetworkshape = [2,2]):
         super(MLPKAN, self).__init__()
         self.subnetworkshape = subnetworkshape
-        self.subnet_init_scale = subnet_init_scale
         self.layers = nn.ModuleList()
 
         layerSizes = [input_size] + hidden_sizes + [output_size]
@@ -37,7 +35,7 @@ class MLPKAN(nn.Module):
             subnetworksi = nn.ModuleDict()
             for j in range(layerSizes[i]):
                 for k in range(layerSizes[i+1]):
-                    subnet = subnetwork(subnetworkshape, init_scale=subnet_init_scale)
+                    subnet = subnetwork(subnetworkshape)
                     subnetworksi[f'subnet_{j}_{k}'] = subnet
             self.layers.append(subnetworksi)
 
