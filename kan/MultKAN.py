@@ -2343,8 +2343,7 @@ class MultKAN(nn.Module):
         # define variables
         if var == None:
             for ii in range(1, self.width[0][0] + 1):
-                exec(f"x{ii} = sympy.Symbol('x_{ii}')")
-                exec(f"x.append(x{ii})")
+                x.append(sympy.Symbol(f'x_{ii}'))
         elif isinstance(var[0], sympy.Expr):
             x = var
         else:
