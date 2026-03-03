@@ -1,5 +1,20 @@
 import torch
 from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+def R2(preds, targets):
+    """
+    Coefficient of Determination (R²).
+    Note: R² can be negative if predictions are worse than the mean baseline.
+    R² = 1 - (SS_res / SS_tot)
+    """
+    pred_mean = torch.mean(preds, dim=0, keepdim=True)
+    target_mean = torch.mean(targets, dim=0, keepdim=True)
+    SS_res = torch.sum((targets - preds)**2, dim=0)
+    SS_tot = torch.sum((targets - target_mean)**2, dim=0)
+    r2_score = 1 - (SS_res / (SS_tot + 1e-8))
+    return torch.nan_to_num(r2_score).item()
+
 
 class subnetwork(nn.Module):
     def __init__(self, subnetworkshape = [2,2]):
@@ -54,6 +69,44 @@ class MLPKAN(nn.Module):
                     out[:, k] += subnet_out.squeeze(-1)
             x = out
         return x
+    
+    def fit(self, dataset, steps, batch_size=16, lr=0.01, earlyStop=False):
+        train_dataset = TensorDataset(dataset['train_input'],dataset['train_label'])
+        test_dataset = TensorDataset(dataset['test_input'], dataset['test_label'])
+
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        device = "cpu"
+
+        loss_fn = nn.MSELoss()
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+
+        rmse_history = []
+        R2_history = []
+        for t in range(steps):
+            self.train()
+            for batch, (X, y) in enumerate(train_dataloader):
+                X, y = X.to(device), y.to(device)
+                pred = self.forward(X)
+                loss = loss_fn(pred, y)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            
+            self.eval()
+            with torch.no_grad():
+                test_pred = self(dataset['test_input'].to(device))
+                rmse_value = torch.sqrt(loss_fn(test_pred, dataset['test_label'].to(device))).item()
+                rmse_history.append(rmse_value)
+                R2_value = R2(test_pred, dataset['test_label'])
+                R2_history.append(R2_value)
+                print(f"Epoch {t+1}/{steps}, RMSE: {rmse_value:.4f}, R2: {R2_value:.4f} ", end='\r')
+                if earlyStop and R2_value > 0.99:
+                    print(f"\nEarly stopping at epoch {t+1} with R2: {R2_value:.4f}")
+                    break
+        
+        return {'rmse_history': rmse_history, 'R2_history': R2_history}
     
 # model = MLPKAN(input_size=1, hidden_sizes=[3], output_size=1, subnetworkshape=[2,2])
 # # model.initialize(scale=5.0)

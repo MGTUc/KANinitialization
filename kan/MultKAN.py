@@ -1479,7 +1479,7 @@ class MultKAN(nn.Module):
         
             
     def fit(self, dataset, opt="LBFGS", steps=100, log=1, lamb=0., lamb_l1=1., lamb_entropy=2., lamb_coef=0., lamb_coefdiff=0., update_grid=True, grid_update_num=10, loss_fn=None, lr=1.,start_grid_update_step=-1, stop_grid_update_step=50, batch=-1,
-              metrics=None, save_fig=False, in_vars=None, out_vars=None, beta=3, save_fig_freq=1, img_folder='./video', singularity_avoiding=False, y_th=1000., reg_metric='edge_forward_spline_n', display_metrics=None):
+              metrics=None, save_fig=False, in_vars=None, out_vars=None, beta=3, save_fig_freq=1, img_folder='./video', singularity_avoiding=False, y_th=1000., reg_metric='edge_forward_spline_n', display_metrics=None, earlyStop=False):
         '''
         training
 
@@ -1529,6 +1529,7 @@ class MultKAN(nn.Module):
                 the metrics to be computed in training
             display_metrics : a list of functions
                 the metric to be displayed in tqdm progress bar
+            earlyStop: Bool, if true stop training if R2 > 0.99
 
         Returns:
         --------
@@ -1601,12 +1602,34 @@ class MultKAN(nn.Module):
             objective = train_loss + lamb * reg_
             objective.backward()
             return objective
+        
+        def R2(preds, targets):
+            """
+            Coefficient of Determination (R²).
+            Note: R² can be negative if predictions are worse than the mean baseline.
+            R² = 1 - (SS_res / SS_tot)
+            """
+            pred_mean = torch.mean(preds, dim=0, keepdim=True)
+            target_mean = torch.mean(targets, dim=0, keepdim=True)
+            SS_res = torch.sum((targets - preds)**2, dim=0)
+            SS_tot = torch.sum((targets - target_mean)**2, dim=0)
+            r2_score = 1 - (SS_res / (SS_tot + 1e-8))
+            return torch.nan_to_num(r2_score)
 
         if save_fig:
             if not os.path.exists(img_folder):
                 os.makedirs(img_folder)
 
         for _ in pbar:
+
+            if earlyStop:
+                earlyStop_pred = self.forward(dataset['train_input'])
+                R2_score = R2(earlyStop_pred, dataset['train_label']).item()
+                earlyStop_pred2 = self.forward(dataset['test_input'])
+                R2_score2 = R2(earlyStop_pred2, dataset['test_label']).item()
+                if R2_score >= 0.99:
+                    print("Early stopping: R2 score >= 0.99", R2_score, R2_score2)
+                    break
             
             if _ == steps-1 and old_save_act:
                 self.save_act = True
@@ -1672,6 +1695,10 @@ class MultKAN(nn.Module):
                 plt.savefig(img_folder + '/' + str(_) + '.jpg', bbox_inches='tight', dpi=200)
                 plt.close()
                 self.save_act = save_act
+            
+
+
+
 
         self.log_history('fit')
         # revert back to original state

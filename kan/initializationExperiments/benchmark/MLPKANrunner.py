@@ -1,4 +1,5 @@
 from kan import KAN
+from kan.initializationExperiments.MLPKAN import MLPKAN
 from kan.feynman import get_feynman_dataset
 import torch
 import numpy as np
@@ -32,7 +33,7 @@ def R2(preds, targets):
 
 def main():
     # Set random seeds for reproducibility
-    seed = 42
+    seed = 500
     device = "cpu"
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -66,11 +67,21 @@ def main():
             y_test = torch.tensor(test_df.iloc[:, -1].values, dtype=torch.float32).reshape(-1, 1)
             dataset = {'train_input': X_train, 'train_label': y_train, 'test_input': X_test, 'test_label': y_test}
             # # Initialize KAN and fit the model
-            kan =KAN(width=[X_train.size()[1],3,1], grid=3, k=3, seed=seed, device=device, auto_save=False)
+
+            MLPKANmodel = MLPKAN(input_size=X_train.size()[1], hidden_sizes=[3], output_size=1, subnetworkshape=[4,4,4])
+            
 
             t0 = time.perf_counter()
+            MLPKANmodel.fit(dataset=dataset, steps=50, batch_size=16, lr=0.001, earlyStop=True);
+            t_MLPKAN = time.perf_counter() - t0
+
+            t1 = time.perf_counter()
+            kan =KAN(width=[X_train.size()[1],3,1], grid=3, k=3, seed=seed, device=device, auto_save=False)
+            kan.set_splines_MLPKAN(dataset['test_input'], MLPKANmodel)
+            t_conversion = time.perf_counter() - t1
+            t5 = time.perf_counter()
             kan.fit(dataset, opt="LBFGS", steps=50, lamb=0.001, earlyStop=True);
-            t_lbfgs = time.perf_counter() - t0
+            t_kanTraining = time.perf_counter() - t5
 
             y_pred_kan = kan(dataset['test_input'])
             R2_score_kan = R2(y_pred_kan, dataset['test_label']).item()
@@ -80,13 +91,13 @@ def main():
 
             kan = kan.prune()
 
-            t1 = time.perf_counter()
-            kan.auto_symbolic(weight_simple=0.8);
-            t_symbolic = time.perf_counter() - t1
-
             t2 = time.perf_counter()
+            kan.auto_symbolic(weight_simple=0.8);
+            t_symbolic = time.perf_counter() - t2
+
+            t3 = time.perf_counter()
             kan.fit(dataset, opt="Adam", lr=0.01, steps=500, lamb=0.001, update_grid=False, singularity_avoiding=True, earlyStop=True);
-            t_adam = time.perf_counter() - t2
+            t_adam = time.perf_counter() - t3
 
             extracted_function, symbols = kan.symbolic_formula()
             expr = extracted_function[0]
@@ -103,14 +114,15 @@ def main():
             print(f"R2 Score: {R2_score_formula}")
             # print(f"pearson correlation coefficient: {r_score_formula}")
 
-            results.append([function_name, R2_score_formula, R2_score_kan, t_lbfgs, t_symbolic, t_adam])
+            results.append([function_name, R2_score_formula, R2_score_kan, t_MLPKAN,t_conversion, t_kanTraining, t_symbolic, t_adam])
+            break
 
         except Exception as e:
             print(f"Error processing {file_path.name}: {e}")
-            results.append([function_name, None, None, None, None, None])
+            results.append([function_name, None, None, None, None, None, None, None])
 
-    results_df = pd.DataFrame(results, columns=['Function', 'R2 Score', 'R2 Score KAN', 'KAN time', 'Symbolic time', 'Adam time'])
-    results_df.to_csv('kan_feynman_results_KAN.csv', index=False)
+    results_df = pd.DataFrame(results, columns=['Function', 'R2 Score', 'R2 Score KAN', 'MLPKAN time', 'Conversion time', 'KAN training time', 'Symbolic time', 'Adam time'])
+    results_df.to_csv('kan_feynman_results_MLPKAN.csv', index=False)
 
 
 if __name__ == "__main__":
