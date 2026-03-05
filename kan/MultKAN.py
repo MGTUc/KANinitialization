@@ -1573,6 +1573,7 @@ class MultKAN(nn.Module):
         results['train_loss'] = []
         results['test_loss'] = []
         results['reg'] = []
+        results['R2'] = []
         if metrics != None:
             for i in range(len(metrics)):
                 results[metrics[i].__name__] = []
@@ -1627,6 +1628,7 @@ class MultKAN(nn.Module):
                 R2_score = R2(earlyStop_pred, dataset['train_label']).item()
                 earlyStop_pred2 = self.forward(dataset['test_input'])
                 R2_score2 = R2(earlyStop_pred2, dataset['test_label']).item()
+                results['R2'].append(R2_score)
                 if R2_score >= 0.99:
                     print("Early stopping: R2 score >= 0.99", R2_score, R2_score2)
                     break
