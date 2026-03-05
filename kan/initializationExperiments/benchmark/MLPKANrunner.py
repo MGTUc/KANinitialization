@@ -1,5 +1,5 @@
 from kan import KAN
-from kan.initializationExperiments.MLPKAN import MLPKAN
+from kan.initializationExperiments.MLPKANoptimizedLBFGS import MLPKAN
 from kan.feynman import get_feynman_dataset
 import torch
 import numpy as np
@@ -72,57 +72,59 @@ def main():
             
 
             t0 = time.perf_counter()
-            MLPKANmodel.fit(dataset=dataset, steps=50, batch_size=16, lr=0.001, earlyStop=True);
+            MLPKANmodel.fit(dataset=dataset, steps=100, earlyStop=True);
             t_MLPKAN = time.perf_counter() - t0
-
-            t1 = time.perf_counter()
-            kan =KAN(width=[X_train.size()[1],3,1], grid=3, k=3, seed=seed, device=device, auto_save=False)
-            kan.set_splines_MLPKAN(dataset['test_input'], MLPKANmodel)
-            t_conversion = time.perf_counter() - t1
-            t5 = time.perf_counter()
-            kan.fit(dataset, opt="LBFGS", steps=50, lamb=0.001, earlyStop=True);
-            t_kanTraining = time.perf_counter() - t5
-
-            y_pred_kan = kan(dataset['test_input'])
+            y_pred_kan = MLPKANmodel(dataset['test_input'])
             R2_score_kan = R2(y_pred_kan, dataset['test_label']).item()
-            # r_score_kan = torch.sqrt(r2(y_pred_kan, dataset['test_label'])).item()
-            print(f"R2 Score KAN: {R2_score_kan}")
-            # print(f"pearson correlation coefficient KAN: {r_score_kan}")
 
-            kan = kan.prune()
+            # t1 = time.perf_counter()
+            # kan =KAN(width=[X_train.size()[1],3,1], grid=3, k=3, seed=seed, device=device, auto_save=False)
+            # kan.set_splines_MLPKAN(dataset['test_input'], MLPKANmodel)
+            # t_conversion = time.perf_counter() - t1
+            # t5 = time.perf_counter()
+            # kan.fit(dataset, opt="LBFGS", steps=50, lamb=0.001, earlyStop=True);
+            # t_kanTraining = time.perf_counter() - t5
 
-            t2 = time.perf_counter()
-            kan.auto_symbolic(weight_simple=0.8);
-            t_symbolic = time.perf_counter() - t2
+            # y_pred_kan = kan(dataset['test_input'])
+            # R2_score_kan = R2(y_pred_kan, dataset['test_label']).item()
+            # # r_score_kan = torch.sqrt(r2(y_pred_kan, dataset['test_label'])).item()
+            # print(f"R2 Score KAN: {R2_score_kan}")
+            # # print(f"pearson correlation coefficient KAN: {r_score_kan}")
 
-            t3 = time.perf_counter()
-            kan.fit(dataset, opt="Adam", lr=0.01, steps=500, lamb=0.001, update_grid=False, singularity_avoiding=True, earlyStop=True);
-            t_adam = time.perf_counter() - t3
+            # kan = kan.prune()
 
-            extracted_function, symbols = kan.symbolic_formula()
-            expr = extracted_function[0]
-            free_syms = list(expr.free_symbols)
-            f = sp.lambdify(free_syms, expr, "numpy")
-            X_test_np = dataset['test_input'].detach().cpu().numpy()
-            symbol_to_idx = {sp.Symbol(f'x_{i+1}'): i for i in range(X_test_np.shape[1])}
-            f_args = [X_test_np[:, symbol_to_idx[s]] for s in free_syms]
-            y_pred_np = f(*f_args) if free_syms else np.full(len(X_test_np), float(expr))
+            # t2 = time.perf_counter()
+            # kan.auto_symbolic(weight_simple=0.8);
+            # t_symbolic = time.perf_counter() - t2
+
+            # t3 = time.perf_counter()
+            # kan.fit(dataset, opt="Adam", lr=0.01, steps=500, lamb=0.001, update_grid=False, singularity_avoiding=True, earlyStop=True);
+            # t_adam = time.perf_counter() - t3
+
+            # extracted_function, symbols = kan.symbolic_formula()
+            # expr = extracted_function[0]
+            # free_syms = list(expr.free_symbols)
+            # f = sp.lambdify(free_syms, expr, "numpy")
+            # X_test_np = dataset['test_input'].detach().cpu().numpy()
+            # symbol_to_idx = {sp.Symbol(f'x_{i+1}'): i for i in range(X_test_np.shape[1])}
+            # f_args = [X_test_np[:, symbol_to_idx[s]] for s in free_syms]
+            # y_pred_np = f(*f_args) if free_syms else np.full(len(X_test_np), float(expr))
             
-            y_pred_formula = torch.tensor(y_pred_np, dtype=dataset["test_label"].dtype, device=dataset["test_label"].device).reshape(-1, 1)
-            R2_score_formula = R2(y_pred_formula, dataset['test_label']).item()
-            # r_score_formula = torch.sqrt(r2(y_pred_formula, dataset['test_label'])).item()
-            print(f"R2 Score: {R2_score_formula}")
-            # print(f"pearson correlation coefficient: {r_score_formula}")
+            # y_pred_formula = torch.tensor(y_pred_np, dtype=dataset["test_label"].dtype, device=dataset["test_label"].device).reshape(-1, 1)
+            # R2_score_formula = R2(y_pred_formula, dataset['test_label']).item()
+            # # r_score_formula = torch.sqrt(r2(y_pred_formula, dataset['test_label'])).item()
+            # print(f"R2 Score: {R2_score_formula}")
+            # # print(f"pearson correlation coefficient: {r_score_formula}")
 
-            results.append([function_name, R2_score_formula, R2_score_kan, t_MLPKAN,t_conversion, t_kanTraining, t_symbolic, t_adam])
-            break
+            # results.append([function_name, R2_score_formula, R2_score_kan, t_MLPKAN,t_conversion, t_kanTraining, t_symbolic, t_adam])
+            results.append([function_name, None, R2_score_kan, t_MLPKAN,None, None, None, None])
 
         except Exception as e:
             print(f"Error processing {file_path.name}: {e}")
             results.append([function_name, None, None, None, None, None, None, None])
 
     results_df = pd.DataFrame(results, columns=['Function', 'R2 Score', 'R2 Score KAN', 'MLPKAN time', 'Conversion time', 'KAN training time', 'Symbolic time', 'Adam time'])
-    results_df.to_csv('kan_feynman_results_MLPKAN.csv', index=False)
+    results_df.to_csv('kan_feynman_results_MLPKANoptimizedLBFGS.csv', index=False)
 
 
 if __name__ == "__main__":
