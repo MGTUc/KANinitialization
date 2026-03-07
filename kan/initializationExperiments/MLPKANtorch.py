@@ -1,7 +1,12 @@
+import random
+import time
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
-from torch.func import functional_call, vmap
+from torch.func import stack_module_state, functional_call, vmap
+import pandas as pd
+from pathlib import Path
 
 def R2(preds, targets):
     """
@@ -38,50 +43,45 @@ class MLPKANlayer(nn.Module):
         super().__init__()
         self.input_size = input_size
         self.output_size = output_size
-        self.n_subnets = input_size * output_size
-
-        self.subnetworks = nn.ModuleList(
-            [subnetwork(subnetworkshape) for _ in range(self.n_subnets)]
-        )
+        
+        # 1. Initialize subnets
+        subnets = nn.ModuleList([subnetwork(subnetworkshape) for _ in range(input_size * output_size)])
+        
+        # 2. Extract and sanitize keys
+        # stack_module_state returns keys like "layers.0.weight"
+        params, buffers = stack_module_state(subnets)
+        
+        # We replace '.' with '_' so ParameterDict doesn't complain
+        self.params = nn.ParameterDict({
+            k.replace('.', '_'): nn.Parameter(v) for k, v in params.items()
+        })
+        self.buffers = buffers
+        
+        # One template module for functional_call to use
+        self.repr_subnetwork = subnets[0]
 
     def forward(self, x):
-        # x: [B, I]
-        B = x.shape[0]
+        batch_size = x.shape[0]
 
-        # Arrange inputs so each subnet gets its own [B, 1] tensor
-        # [B, I] -> [B, I, O] -> [B, I*O, 1] -> [I*O, B, 1]
-        x_pairs = (
-            x.unsqueeze(2)
-             .expand(B, self.input_size, self.output_size)
-             .reshape(B, self.n_subnets, 1)
-             .permute(1, 0, 2)
-        )
+        # 3. Prepare Input
+        # Expand x to [n_subnets, batch, 1]
+        x_expanded = x.T.repeat_interleave(self.output_size, dim=0).unsqueeze(-1)
 
-        # Stack real parameters from ModuleList so gradients flow back to each subnet.
-        param_names = [name for name, _ in self.subnetworks[0].named_parameters()]
-        buffer_names = [name for name, _ in self.subnetworks[0].named_buffers()]
+        # 4. Reconstruct dotted keys for the functional call
+        # PyTorch needs the original names (with dots) to know where weights go
+        dotted_params = {k.replace('_', '.'): v for k, v in self.params.items()}
 
-        params = {
-            name: torch.stack([module.get_parameter(name) for module in self.subnetworks], dim=0)
-            for name in param_names
-        }
-        buffers = {
-            name: torch.stack([module.get_buffer(name) for module in self.subnetworks], dim=0)
-            for name in buffer_names
-        }
+        def single_subnet_forward(p, b, data):
+            return functional_call(self.repr_subnetwork, (p, b), (data,))
 
-        def fmodel(p, b, x_one):
-            # x_one: [B, 1] for one subnet
-            return functional_call(self.subnetworks[0], (p, b), (x_one,)).squeeze(-1)  # [B]
-
-        # Vectorize across subnetworks (no Python for-loop over subnets)
-        y = vmap(fmodel, in_dims=(0, 0, 0))(params, buffers, x_pairs)  # [I*O, B]
-
-        # Reshape to [B, I, O], sum over I -> [B, O]
-        y = y.permute(1, 0).reshape(B, self.input_size, self.output_size).sum(dim=1)
-        return y
-
+        # 5. Vectorized Execution
+        out_raw = vmap(single_subnet_forward)(dotted_params, self.buffers, x_expanded)
         
+        # 6. Summation (KAN Logic)
+        # Reshape to [in, out, batch] -> Sum over 'in' -> Transpose to [batch, out]
+        out_raw = out_raw.view(self.input_size, self.output_size, batch_size)
+        return out_raw.sum(dim=0).T
+
 
 class MLPKAN(nn.Module):
     def __init__(self, input_size, hidden_sizes=[3], output_size=1, subnetworkshape = [2,2]):
@@ -101,50 +101,91 @@ class MLPKAN(nn.Module):
     def forward(self, x):
         return self.layers(x)
     
-    def fit(self, dataset, steps, batch_size=16, lr=0.001, earlyStop=False):
-        train_dataset = TensorDataset(dataset['train_input'],dataset['train_label'])
-        test_dataset = TensorDataset(dataset['test_input'], dataset['test_label'])
+    def fit(self, dataset, steps, batch_size=128, lr=1, earlyStop=False, optimizer_name='Adam'):
+        device = next(self.parameters()).device
 
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-        device = "cpu"
+        train_data = dataset['train_input'].to(device)
+        train_labels = dataset['train_label'].to(device)
+        test_data = dataset['test_input'].to(device)
+        test_labels = dataset['test_label'].to(device)
 
         loss_fn = nn.MSELoss()
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-
-        rmse_history = []
-        R2_history = []
+        if optimizer_name == 'Adam':
+            optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        elif optimizer_name == 'LBFGS':
+            optimizer = torch.optim.LBFGS(self.parameters(), lr=lr, line_search_fn="strong_wolfe")
+        
+        history = {'rmse_history': [], 'R2_history': []}
+        n_samples = train_data.shape[0]
+        
         for t in range(steps):
             self.train()
-            for batch, (X, y) in enumerate(train_dataloader):
-                X, y = X.to(device), y.to(device)
-                pred = self.forward(X)
-                loss = loss_fn(pred, y)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+            if optimizer_name == 'Adam':
+                # Manual batching with shuffling
+                indices = torch.randperm(n_samples, device=device)
+                for i in range(0, n_samples, batch_size):
+                    batch_indices = indices[i:i+batch_size]
+                    X, y = train_data[batch_indices], train_labels[batch_indices]
+                    pred = self.forward(X)
+                    loss = loss_fn(pred, y)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+                    optimizer.step()
+            elif optimizer_name == 'LBFGS':
+                def closure():
+                    optimizer.zero_grad()
+                    pred = self.forward(train_data)
+                    loss = loss_fn(pred, train_labels)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+                    return loss
+                optimizer.step(closure)
             
             self.eval()
             with torch.no_grad():
-                test_pred = self(dataset['test_input'].to(device))
-                rmse_value = torch.sqrt(loss_fn(test_pred, dataset['test_label'].to(device))).item()
-                rmse_history.append(rmse_value)
-                R2_value = R2(test_pred, dataset['test_label'])
-                R2_history.append(R2_value)
-                print(f"Epoch {t+1}/{steps}, RMSE: {rmse_value:.4f}, R2: {R2_value:.4f} ", end='\r')
+                test_pred = self(test_data)
+
+                rmse_value = torch.sqrt(loss_fn(test_pred, test_labels)).item()
+                history['rmse_history'].append(rmse_value)
+
+                R2_value = R2(test_pred, test_labels)
+                history['R2_history'].append(R2_value)
+                print(f"Epoch {t+1}/{steps}, RMSE: {rmse_value:.4f}, R2: {R2_value:.4f} ", end='\r',flush=True)
                 if earlyStop and R2_value > 0.99:
                     print(f"\nEarly stopping at epoch {t+1} with R2: {R2_value:.4f}")
                     break
         
-        return {'rmse_history': rmse_history, 'R2_history': R2_history}
-    
-# model = MLPKAN(input_size=1, hidden_sizes=[3], output_size=1, subnetworkshape=[2,2])
-# # model.initialize(scale=5.0)
-# # x = torch.randn(5, 2)
-# # .expand(-1, 2)
-# x = torch.linspace(-1, 1, steps=5).unsqueeze(1)
-# print(x)
-# output = model(x)
-# print(output)
+        return history
+
+seed = 1
+torch.manual_seed(seed)
+np.random.seed(seed)
+random.seed(seed)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MLPKANmodel = MLPKAN(input_size=2, hidden_sizes=[3], output_size=1, subnetworkshape=[5])
+# model = torch.compile(MLPKANmodel)
+
+train_path = Path('feynmanDataset/train/I.12.1_train.csv')
+test_path = Path('feynmanDataset/test/I.12.1_test.csv')
+
+train_df = pd.read_csv(train_path, header=None)
+test_df = pd.read_csv(test_path, header=None)
+X_train = torch.tensor(train_df.iloc[:, :-1].values, dtype=torch.float32)
+y_train = torch.tensor(train_df.iloc[:, -1].values, dtype=torch.float32).reshape(-1, 1)
+X_test = torch.tensor(test_df.iloc[:, :-1].values, dtype=torch.float32)
+y_test = torch.tensor(test_df.iloc[:, -1].values, dtype=torch.float32).reshape(-1, 1)
+dataset = {'train_input': X_train, 'train_label': y_train, 'test_input': X_test, 'test_label': y_test}
+
+t0 = time.perf_counter()
+histories = MLPKANmodel.fit(dataset, steps=1000, lr=1, earlyStop=True, optimizer_name='LBFGS')
+t1 = time.perf_counter() - t0
+print(t1)
+
+pred = MLPKANmodel.forward(dataset['train_input'])
+R2_score = R2(pred, dataset['train_label'])
+pred2 = MLPKANmodel.forward(dataset['test_input'])
+R2_score2 = R2(pred2, dataset['test_label'])
+print("R2 score train:", R2_score, "R2 score test:", R2_score2)
         
