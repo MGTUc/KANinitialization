@@ -4,6 +4,7 @@ docs/_build/
 docs/_static/
 docs/_templates
 test
+!feynmanDataset/test
 sr
 pde
 hidden
